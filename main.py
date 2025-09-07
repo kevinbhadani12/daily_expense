@@ -44,7 +44,7 @@ def login():
     st.write(f"[🔑 Login with Google]({auth_url})")
 
 def callback():
-    params = st.query_params()
+    params = st.experimental_get_query_params()
     if "code" in params:
         full_url = f"{st.secrets['google']['redirect_uri']}?{urlencode(params, doseq=True)}"
 
