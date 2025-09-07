@@ -9,14 +9,11 @@ from google.auth.transport import requests
 import os
 from urllib.parse import urlencode
 
-import json
-
 # -----------------------------
 # GOOGLE AUTH
 # -----------------------------
-os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # For localhost testing only
+os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"  # ⚠️ Only for localhost! Remove in production
 
-# Load from Streamlit Secrets
 CLIENT_ID = st.secrets["google"]["client_id"]
 CLIENT_SECRET = st.secrets["google"]["client_secret"]
 REDIRECT_URI = st.secrets["google"]["redirect_uri"]
@@ -44,23 +41,10 @@ def login():
     st.write(f"[🔑 Login with Google]({auth_url})")
 
 def callback():
-    params = st.experimental_get_query_params()
+    params = st.query_params  # ✅ New API
     if "code" in params:
-        full_url = f"{st.secrets['google']['redirect_uri']}?{urlencode(params, doseq=True)}"
-
-        flow = Flow.from_client_config(
-            {
-                "web": {
-                    "client_id": CLIENT_ID,
-                    "client_secret": CLIENT_SECRET,
-                    "redirect_uris": [REDIRECT_URI],
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }
-            },
-            scopes=SCOPES,
-        )
-        flow.redirect_uri = REDIRECT_URI
+        full_url = f"{REDIRECT_URI}?{urlencode(params, doseq=True)}"
+        flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=REDIRECT_URI)
 
         try:
             flow.fetch_token(authorization_response=full_url)
@@ -68,8 +52,8 @@ def callback():
             idinfo = id_token.verify_oauth2_token(credentials.id_token, requests.Request(), CLIENT_ID)
             st.session_state["credentials"] = idinfo
 
-            # After successful login, clear query params so token exchange is not retried
-            st.experimental_set_query_params()
+            # Clear query params so token exchange is not retried
+            st.query_params.clear()
             return True
         except Exception as e:
             st.error(f"Login failed: {e}")
@@ -78,7 +62,7 @@ def callback():
 
 def logout():
     st.session_state["credentials"] = None
-    st.experimental_set_query_params()  # clear URL params so old code isn’t retried
+    st.query_params.clear()
     st.rerun()
 
 # -----------------------------
@@ -97,10 +81,14 @@ def init_db():
                     notes TEXT,
                     created_at TEXT
                 )''')
+    # ✅ Add index for faster queries
+    c.execute("CREATE INDEX IF NOT EXISTS idx_user_date ON expenses (user_email, date)")
     conn.commit()
     conn.close()
 
 def add_expense(user_email, category, amount, payment_method, date, notes):
+    if amount <= 0:
+        return False
     conn = sqlite3.connect("expenses.db")
     c = conn.cursor()
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -108,6 +96,7 @@ def add_expense(user_email, category, amount, payment_method, date, notes):
               (user_email, category, amount, payment_method, date, notes, created_at))
     conn.commit()
     conn.close()
+    return True
 
 def get_expenses(user_email, search=None):
     conn = sqlite3.connect("expenses.db")
@@ -144,24 +133,34 @@ if st.session_state["credentials"] is None:
         login()
         st.stop()
 
-# Logged-in user email
 user_email = st.session_state["credentials"]["email"]
 
-# Logout button
+# Sidebar
 st.sidebar.button("🚪 Logout", on_click=logout)
-
-# Initialize DB
-init_db()
-
-# Sidebar Menu
 menu = st.sidebar.radio("Menu", ["Home", "Add Expense", "View Expenses", "Reports"])
+
+# Init DB
+init_db()
 
 # -----------------------------
 # Home
 # -----------------------------
 if menu == "Home":
     st.header(f"🏠 Welcome {user_email}")
-    st.write("Track and visualize your expenses securely with Google login + SQLite.")
+    rows = get_expenses(user_email)
+    df = pd.DataFrame(rows, columns=["ID", "User Email", "Category", "Amount", "Payment Method", "Date", "Notes", "Created At"])
+
+    if not df.empty:
+        total = df["Amount"].sum()
+        this_month = df[pd.to_datetime(df["Date"]).dt.month == datetime.now().month]["Amount"].sum()
+        top_category = df.groupby("Category")["Amount"].sum().idxmax()
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("💵 Total Spent", f"₹{total:,.2f}")
+        c2.metric("📅 This Month", f"₹{this_month:,.2f}")
+        c3.metric("🏆 Top Category", top_category)
+    else:
+        st.info("No expenses recorded yet. Start adding some!")
 
 # -----------------------------
 # Add Expense
@@ -179,8 +178,10 @@ elif menu == "Add Expense":
         notes = st.text_area("Notes")
 
     if st.button("Save Expense"):
-        add_expense(user_email, category, amount, payment_method, str(date), notes)
-        st.success("✅ Expense added successfully!")
+        if add_expense(user_email, category, amount, payment_method, str(date), notes):
+            st.success("✅ Expense added successfully!")
+        else:
+            st.error("❌ Amount must be greater than zero.")
 
 # -----------------------------
 # View Expenses
@@ -205,12 +206,13 @@ elif menu == "View Expenses":
         fig = px.pie(category_summary, names="Category", values="Amount")
         st.plotly_chart(fig, use_container_width=True)
 
-        # Delete option
+        # Delete option (better UX)
         st.subheader("🗑️ Delete Expense")
-        delete_id = st.number_input("Enter Expense ID to Delete", min_value=1, step=1)
+        delete_id = st.selectbox("Select Expense ID", df["ID"].tolist())
         if st.button("Delete"):
             delete_expense(delete_id, user_email)
             st.warning(f"Deleted expense ID {delete_id}")
+            st.rerun()
     else:
         st.info("No expenses found.")
 
@@ -262,7 +264,7 @@ elif menu == "Reports":
 
             st.subheader("📅 Expenses Over Time")
             time_summary = filtered.groupby(filtered["Date"].dt.date)["Amount"].sum().reset_index()
-            fig2 = px.bar(time_summary, x="Date", y="Amount", title="Expenses Trend")
+            fig2 = px.line(time_summary, x="Date", y="Amount", title="Expenses Trend")  # ✅ Changed to line chart
             st.plotly_chart(fig2, use_container_width=True)
 
             st.dataframe(filtered.drop(columns=["User Email"]), use_container_width=True)
