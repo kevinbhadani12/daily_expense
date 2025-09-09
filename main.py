@@ -41,30 +41,50 @@ def login():
 
     st.markdown(
         f"""
-        <div style="text-align:center; margin-top:50px;">
-            <h2>Welcome to 💰 Expense Tracker</h2>
+        <style>
+            body {{
+                background: linear-gradient(135deg, #1f1c2c, #928dab);
+                color: white;
+                font-family: 'Segoe UI', sans-serif;
+            }}
+            .login-card {{
+                max-width: 450px;
+                margin: 100px auto;
+                padding: 40px;
+                border-radius: 15px;
+                background: rgba(0,0,0,0.75);
+                box-shadow: 0px 8px 20px rgba(0,0,0,0.5);
+                text-align: center;
+            }}
+            .google-btn {{
+                background-color: #4285F4;
+                color: white !important;
+                border: none;
+                padding: 12px 25px;
+                font-size: 18px;
+                border-radius: 8px;
+                cursor: pointer;
+                display: inline-block;
+                margin-top: 20px;
+                text-decoration: none;
+                transition: background 0.3s ease;
+            }}
+            .google-btn:hover {{
+                background-color: #3367d6;
+            }}
+        </style>
+
+        <div class="login-card">
+            <h2>💰 Expense Tracker</h2>
             <p>Please login with Google to continue</p>
-            <a href="{auth_url}">
-                <button style="
-                    background-color: #4285F4;
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    font-size: 18px;
-                    border-radius: 8px;
-                    cursor: pointer;
-                ">
-                    🔑 Login with Google
-                </button>
-            </a>
+            <a class="google-btn" href="{auth_url}">🔑 Login with Google</a>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-
 def callback():
-    params = st.query_params  # ✅ new API
+    params = st.query_params
     if "code" in params:
         full_url = f"{REDIRECT_URI}?{urlencode(params, doseq=True)}"
         flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=REDIRECT_URI)
@@ -73,7 +93,7 @@ def callback():
             flow.fetch_token(authorization_response=full_url)
             credentials = flow.credentials
 
-            # ✅ Store id_token + user info
+            # ✅ Save both token + user info
             st.session_state["id_token"] = credentials.id_token
             idinfo = id_token.verify_oauth2_token(credentials.id_token, requests.Request(), CLIENT_ID)
             st.session_state["credentials"] = idinfo
@@ -152,13 +172,13 @@ st.set_page_config(page_title="Expense Tracker", layout="wide")
 st.title("💰 Google Authenticated Expense Tracker")
 
 # -----------------------------
-# Google login (persistent after refresh)
+# Google login (persistent)
 # -----------------------------
 if "credentials" not in st.session_state or st.session_state["credentials"] is None:
     if "id_token" in st.session_state:
         try:
             idinfo = id_token.verify_oauth2_token(st.session_state["id_token"], requests.Request(), CLIENT_ID)
-            st.session_state["credentials"] = idinfo  # restore session
+            st.session_state["credentials"] = idinfo
         except Exception:
             login()
             st.stop()
@@ -170,6 +190,7 @@ if "credentials" not in st.session_state or st.session_state["credentials"] is N
             st.stop()
 
 user_email = st.session_state["credentials"]["email"]
+
 # Sidebar
 st.sidebar.button("🚪 Logout", on_click=logout)
 menu = st.sidebar.radio("Menu", ["Home", "Add Expense", "View Expenses", "Reports"])
