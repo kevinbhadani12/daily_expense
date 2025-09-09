@@ -38,10 +38,33 @@ if "credentials" not in st.session_state:
 def login():
     flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=REDIRECT_URI)
     auth_url, _ = flow.authorization_url(prompt="consent")
-    st.write(f"[🔑 Login with Google]({auth_url})")
+
+    st.markdown(
+        f"""
+        <div style="text-align:center; margin-top:50px;">
+            <h2>Welcome to 💰 Expense Tracker</h2>
+            <p>Please login with Google to continue</p>
+            <a href="{auth_url}">
+                <button style="
+                    background-color: #4285F4;
+                    color: white;
+                    border: none;
+                    padding: 12px 24px;
+                    font-size: 18px;
+                    border-radius: 8px;
+                    cursor: pointer;
+                ">
+                    🔑 Login with Google
+                </button>
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 
 def callback():
-    params = st.query_params  # ✅ New API
+    params = st.query_params  # ✅ new API
     if "code" in params:
         full_url = f"{REDIRECT_URI}?{urlencode(params, doseq=True)}"
         flow = Flow.from_client_config(client_config, scopes=SCOPES, redirect_uri=REDIRECT_URI)
@@ -49,16 +72,19 @@ def callback():
         try:
             flow.fetch_token(authorization_response=full_url)
             credentials = flow.credentials
+
+            # ✅ Store id_token + user info
+            st.session_state["id_token"] = credentials.id_token
             idinfo = id_token.verify_oauth2_token(credentials.id_token, requests.Request(), CLIENT_ID)
             st.session_state["credentials"] = idinfo
 
-            # Clear query params so token exchange is not retried
             st.query_params.clear()
             return True
         except Exception as e:
             st.error(f"Login failed: {e}")
             return False
     return False
+
 
 def logout():
     st.session_state["credentials"] = None
@@ -125,16 +151,25 @@ def delete_expense(expense_id, user_email):
 st.set_page_config(page_title="Expense Tracker", layout="wide")
 st.title("💰 Google Authenticated Expense Tracker")
 
-# Google login
-if st.session_state["credentials"] is None:
-    if callback():
-        st.success(f"✅ Welcome {st.session_state['credentials']['email']}")
+# -----------------------------
+# Google login (persistent after refresh)
+# -----------------------------
+if "credentials" not in st.session_state or st.session_state["credentials"] is None:
+    if "id_token" in st.session_state:
+        try:
+            idinfo = id_token.verify_oauth2_token(st.session_state["id_token"], requests.Request(), CLIENT_ID)
+            st.session_state["credentials"] = idinfo  # restore session
+        except Exception:
+            login()
+            st.stop()
     else:
-        login()
-        st.stop()
+        if callback():
+            st.success(f"✅ Welcome {st.session_state['credentials']['email']}")
+        else:
+            login()
+            st.stop()
 
 user_email = st.session_state["credentials"]["email"]
-
 # Sidebar
 st.sidebar.button("🚪 Logout", on_click=logout)
 menu = st.sidebar.radio("Menu", ["Home", "Add Expense", "View Expenses", "Reports"])
